@@ -1,0 +1,19 @@
+{
+  "name": "bidmaster",
+  "version": "1.0.0",
+  "private": true,
+  "description": "BidMaster AI - Platform Pembuatan Proposal B2B / Tender",
+  "scripts": {
+    "prepare": "husky",
+    "lint:frontend": "npm run --prefix frontend lint",
+    "build:frontend": "npm run --prefix frontend build",
+    "lint:backend": "cd backend && php vendor/bin/pint --test",
+    "test:backend": "cd backend && php artisan test",
+    "test:frontend": "npm run lint:frontend && npm run build:frontend",
+    "test": "npm run lint:frontend && npm run build:frontend && npm run lint:backend",
+    "check": "npm test"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7"
+  }
+}
