@@ -24,8 +24,8 @@ export default function Step2({ p, setP, goHarga, agent }: {
   const [busy, setBusy] = useState("");
   const [touched, setTouched] = useState<Record<string, boolean>>({});
 
-  const decisions: Record<string, Decision> = p.decisions ?? {};
-  const items: Item[] = p.items ?? [];
+  const decisions: Record<string, Decision> = useMemo(() => p.decisions ?? {}, [p.decisions]);
+  const items: Item[] = useMemo(() => p.items ?? [], [p.items]);
 
   const counts = useMemo(() => {
     const c = { sesuai: 0, sebagian: 0, berisiko: 0 };
@@ -108,10 +108,17 @@ export default function Step2({ p, setP, goHarga, agent }: {
   }
 
   function startDec(id: string, putusan: string) {
-    setDec((m) => ({ ...m, [id]: m[id] ?? { putusan, status: "sesuai", alasan: "", catatan: "", pertanyaan: "" } }));
-    if (putusan !== (dec[id]?.putusan ?? "")) {
-      setDec((m) => ({ ...m, [id]: { ...(m[id] ?? { status: "sesuai", alasan: "", catatan: "", pertanyaan: "" }), putusan } }));
-    }
+    const existing = decisions[id];
+    setDec((m) => ({
+      ...m,
+      [id]: {
+        putusan,
+        status: existing?.status_akhir ?? "sesuai",
+        alasan: existing?.alasan ?? "",
+        catatan: existing?.catatan ?? "",
+        pertanyaan: existing?.pertanyaan ?? "",
+      },
+    }));
   }
 
   const stat = [
@@ -175,9 +182,10 @@ export default function Step2({ p, setP, goHarga, agent }: {
       </Card>
 
       {massal && (
-        <div className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4" onClick={() => setMassal(false)}>
-          <div role="dialog" aria-modal="true" className="bg-white border border-[#C9DDEE] rounded-2xl p-6 max-w-sm w-full max-h-[90dvh] overflow-y-auto anim-pop shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <p className="text-base text-slate-800">{kandidatMassal} {T.tinjau.massalTanya}</p>
+        <div className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4" onClick={() => setMassal(false)}
+          onKeyDown={(e) => { if (e.key === "Escape") setMassal(false); }}>
+          <div role="dialog" aria-modal="true" aria-labelledby="massal-title" className="bg-white border border-[#C9DDEE] rounded-2xl p-6 max-w-sm w-full max-h-[90dvh] overflow-y-auto anim-pop shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <p id="massal-title" className="text-base text-slate-800">{kandidatMassal} {T.tinjau.massalTanya}</p>
             <div className="mt-4 flex gap-2 justify-end">
               <Button variant="secondary" size="sm" onClick={() => setMassal(false)}>{T.umum.kembali}</Button>
               <Button size="sm" onClick={massalGo}>{T.tinjau.massalYa}</Button>
@@ -236,7 +244,7 @@ export default function Step2({ p, setP, goHarga, agent }: {
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-sm font-bold text-[#0F1B3D]">{T.tinjau.putusanJudul}</p>
                     {dc
-                      ? <span className="text-xs font-semibold text-green-700 inline-flex items-center gap-1"><CheckCircle2 size={13} aria-hidden /> {T.tinjau.sudahDiputus} ({dc.putusan})</span>
+                      ? <span className="text-xs font-semibold text-green-700 inline-flex items-center gap-1"><CheckCircle2 size={13} aria-hidden /> {T.tinjau.sudahDiputus} ({dc.putusan}{dc.putusan === "ubah" ? ` → ${STATUS_LABEL[dc.status_akhir as keyof typeof STATUS_LABEL] ?? dc.status_akhir}` : ""})</span>
                       : <span className="text-xs text-slate-500">{T.tinjau.belumDiputus}</span>}
                   </div>
                   <div className="flex gap-2 flex-wrap mt-2" role="group" aria-label={T.tinjau.putusanJudul}>

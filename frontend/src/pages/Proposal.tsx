@@ -19,6 +19,8 @@ export default function Proposal() {
   const [savedAt, setSavedAt] = useState("");
   const [dirty, setDirty] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingPatchRef = useRef<Record<string, unknown>>({});
+  const creatingRef = useRef(false);
 
   const load = useCallback(async (pid: number, syncStep = false) => {
     try {
@@ -32,8 +34,15 @@ export default function Proposal() {
 
   useEffect(() => {
     if (id) {
-      load(parseInt(id, 10), true);
+      const numId = parseInt(id, 10);
+      if (Number.isNaN(numId) || numId <= 0) {
+        setErr("ID proposal tidak valid.");
+        return;
+      }
+      load(numId, true);
     } else {
+      if (creatingRef.current) return;
+      creatingRef.current = true;
       ProposalApi.create({}).then((j) => {
         setP(j.proposal);
         nav(`/app/${j.proposal.id}`, { replace: true });
@@ -44,10 +53,13 @@ export default function Proposal() {
   const autosave = useCallback((patch: object) => {
     if (!p) return;
     setDirty(true);
+    pendingPatchRef.current = { ...pendingPatchRef.current, ...patch };
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(async () => {
+      const toSend = pendingPatchRef.current;
+      pendingPatchRef.current = {};
       try {
-        const j = await ProposalApi.patch(p.id, patch);
+        const j = await ProposalApi.patch(p.id, toSend);
         setP(j.proposal);
         setSavedAt(j.tersimpan_pukul);
         setDirty(false);

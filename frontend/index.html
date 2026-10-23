@@ -12,7 +12,7 @@
     <link rel="preload" href="/fonts/sora-800-latin.woff2" as="font" type="font/woff2" crossorigin />
     <!-- Catatan: frame-ancestors hanya berlaku via HTTP header (di-set backend),
          tidak bisa lewat <meta> — menghindari peringatan konsol. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'" />
     <title>BidMaster — Susun Draft Tender dalam Menit</title>
   </head>
   <body>

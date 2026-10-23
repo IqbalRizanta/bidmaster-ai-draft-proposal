@@ -1,6 +1,6 @@
 import { Eye, EyeOff, LogIn, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth";
 import { Alert, Button, Card, FieldError, Input, Label } from "../components/ui/controls";
 import { toast } from "../components/ui/toast";
@@ -8,6 +8,8 @@ import { T } from "../ui-text";
 
 export default function Login() {
   const nav = useNavigate();
+  const loc = useLocation();
+  const from = (loc.state as { from?: { pathname?: string } })?.from?.pathname || "/app";
   const { login, user, ready } = useAuth();
   const [nama, setNama] = useState("");
   const [pw, setPw] = useState("");
@@ -16,7 +18,7 @@ export default function Login() {
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { if (ready && user) nav("/app"); }, [ready, user, nav]);
+  useEffect(() => { if (ready && user) nav(from, { replace: true }); }, [ready, user, nav, from]);
 
   const namaErr = tried && nama.trim().length < 2 ? T.validasi.wajib : "";
   const pwErr = tried && pw === "" ? T.validasi.wajib : "";
@@ -30,7 +32,7 @@ export default function Login() {
     try {
       await login(nama.trim(), pw);
       toast("Berhasil masuk.", "ok");
-      nav("/app");
+      nav(from, { replace: true });
     } catch (e) {
       const s = (e as { status?: number }).status;
       const m =

@@ -5,9 +5,10 @@ import { useAuth } from "../auth";
 import { Button } from "../components/ui/controls";
 import { toast } from "../components/ui/toast";
 import { api, agentStatus, authHeaders } from "../lib/utils";
+import { formatTime, judulDari, renderAgentMarkdown, unduhJawaban } from "../lib/agent-utils";
 import { T } from "../ui-text";
 
-export type Msg = { role: "user" | "bot"; text: string; err?: boolean; lampiran?: string; mode?: Mode; saranFile?: boolean };
+export type Msg = { role: "user" | "bot"; text: string; err?: boolean; lampiran?: string; mode?: Mode; saranFile?: boolean; time?: string };
 type Lampiran = { file: File; nama: string };
 type Mode = "proposal" | "umum";
 
@@ -21,80 +22,6 @@ const HINTS = [
 
 const ACCEPT = [".txt", ".md", ".csv", ".json", ".pdf", ".docx"];
 const MAX_BYTES = 200 * 1024;
-
-/** Buat nama file aman dari judul/instansi. */
-function slug(s: string): string {
-  const t = s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  return t || "jawaban-bob";
-}
-
-/** Unduh teks jawaban Bob sebagai .docx (server, ber-cover) atau .md (klien). */
-export async function unduhJawaban(text: string, format: "docx" | "md", judul: string): Promise<void> {
-  const nama = slug(judul);
-  if (format === "md") {
-    const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${nama}.md`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-    return;
-  }
-  const r = await fetch("/api/agent/file", {
-    method: "POST",
-    headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ markdown: text, format: "docx", judul, nama }),
-  });
-  if (!r.ok) {
-    const j = (await r.json().catch(() => ({}))) as { error?: string };
-    throw new Error(j.error ?? T.agen.unduhGagal);
-  }
-  const blob = await r.blob();
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `${nama}.docx`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-}
-
-/** Judul dokumen dari heading pertama jawaban, fallback ke nama konteks. */
-export function judulDari(text: string, fallback: string): string {
-  const h = text.match(/^\s*#{1,3}\s+(.+)$/m)?.[1]?.trim();
-  const t = (h || fallback || "Dokumen Bob").replace(/[*_`#]/g, "").replace(/\s+/g, " ").trim();
-
-  return t.slice(0, 120) || "Dokumen Bob";
-}
-
-/** Markdown ringan → HTML dengan blok & spasi yang benar. */
-export function md(text: string): string {
-  let s = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  s = s.replace(/```[\w]*\n?([\s\S]*?)```/g, (_, c: string) => `<pre><code>${c.replace(/\n$/, "")}</code></pre>`);
-  s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
-  s = s.replace(/^### (.+)$/gm, "<h3>$1</h3>").replace(/^## (.+)$/gm, "<h2>$1</h2>").replace(/^# (.+)$/gm, "<h1>$1</h1>");
-  s = s.replace(/^&gt; (.+)$/gm, "<blockquote>$1</blockquote>");
-  s = s.replace(/^\s*(?:---|\*\*\*)\s*$/gm, "<hr>");
-  s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
-  s = s.replace(/\|(.+)\|\n\|[-| :]+\|\n((?:\|.+\|\n?)*)/g, (_, h: string, rows: string) => {
-    const th = h.split("|").map((c) => c.trim()).filter(Boolean).map((c) => `<th>${c}</th>`).join("");
-    const tr = rows.trim().split("\n").map((r) =>
-      `<tr>${r.split("|").map((c) => c.trim()).filter(Boolean).map((c) => `<td>${c}</td>`).join("")}</tr>`).join("");
-    return `<table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
-  });
-  return s.split(/\n{2,}/).map((b) => {
-    const t = b.trim();
-    if (!t) return "";
-    if (/^<(h[1-6]|table|pre|ul|ol|blockquote|hr)/.test(t)) return t;
-    const lines = t.split("\n");
-    if (lines.every((l) => /^\s*[-*+] /.test(l))) return `<ul>${lines.map((l) => `<li>${l.replace(/^\s*[-*+] /, "")}</li>`).join("")}</ul>`;
-    if (lines.every((l) => /^\s*\d+[.)] /.test(l))) return `<ol>${lines.map((l) => `<li>${l.replace(/^\s*\d+[.)] /, "")}</li>`).join("")}</ol>`;
-    return `<p>${lines.map((l) => l.trim()).filter(Boolean).join("<br>")}</p>`;
-  }).filter(Boolean).join("\n");
-}
 
 /** Indikator "berpikir" bergaya LLM: titik mengetik + shimmer teks. */
 function Thinking() {
@@ -204,7 +131,8 @@ export function ChatBob({ variant = "compact", context }: {
     if (t === "" && !lamp) { toast(T.agen.butuhSatu, "warn"); return; }
     if (!logged) { toast(T.agen.belumLogin, "warn"); return; }
     const l = lamp;
-    if (!retry) setMsgs((m) => [...m, { role: "user", text: t, lampiran: l?.nama }]);
+    const nowTime = formatTime();
+    if (!retry) setMsgs((m) => [...m, { role: "user", text: t, lampiran: l?.nama, time: nowTime }]);
     setInput("");
     setLamp(null);
     setBusy(true);
@@ -222,12 +150,18 @@ export function ChatBob({ variant = "compact", context }: {
       } else {
         j = await api<{ text: string }>("/api/agent", {
           method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
-          body: JSON.stringify({ message: t, flow: "bidmaster_proposal_generator", session_id: sessionId, mode }),
+          body: JSON.stringify({
+            message: t,
+            flow: "bidmaster_proposal_generator",
+            session_id: sessionId,
+            mode,
+            ...(context ? { proposal_id: context.id, konteks_proposal: context.id } : {}),
+          }),
         });
       }
-      setMsgs((m) => [...m, { role: "bot", text: j.text, mode, saranFile: j.saran_file === true }]);
+      setMsgs((m) => [...m, { role: "bot", text: j.text, mode, saranFile: j.saran_file === true, time: formatTime() }]);
     } catch (e) {
-      setMsgs((m) => [...m, { role: "bot", text: `**${T.agen.gagal}**\n\n${e instanceof Error ? e.message : ""}`.trim(), err: true }]);
+      setMsgs((m) => [...m, { role: "bot", text: `**${T.agen.gagal}**\n\n${e instanceof Error ? e.message : ""}`.trim(), err: true, time: formatTime() }]);
     } finally {
       setBusy(false);
     }
@@ -286,7 +220,7 @@ export function ChatBob({ variant = "compact", context }: {
               {ready === null ? T.agen.memeriksa : ready ? T.agen.terhubung : T.agen.tidakTerhubung}
             </span>
             {!full && (
-              <Link to="/bob" className="no-underline">
+              <Link to={context ? `/bob?proposal=${context.id}` : "/bob"} className="no-underline">
                 <Button size="sm" variant="secondary"><ArrowUpRight size={14} aria-hidden /><span className="hidden sm:inline">{T.agen.bukaHalaman}</span></Button>
               </Link>
             )}
@@ -335,7 +269,7 @@ export function ChatBob({ variant = "compact", context }: {
                       {m.text}
                     </div>
                   : <div className={`bg-white border rounded-2xl rounded-bl-md px-4 py-3 shadow-[0_2px_14px_rgba(15,27,61,0.06)] ${m.err ? "border-red-300 bg-red-50" : "border-slate-200"}`}>
-                      <div className={`chat-md ${m.err ? "text-red-800" : ""}`} dangerouslySetInnerHTML={{ __html: md(m.text) }} />
+                      <div className={`chat-md ${m.err ? "text-red-800" : ""}`} dangerouslySetInnerHTML={{ __html: renderAgentMarkdown(m.text) }} />
                       {m.err && (
                         <button onClick={() => send(msgs[i - 1]?.text ?? "", true)} disabled={busy}
                           className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-brand hover:underline disabled:opacity-50">
@@ -350,7 +284,7 @@ export function ChatBob({ variant = "compact", context }: {
                       )}
                     </div>}
                 <div className="flex items-center gap-2 mt-1.5 px-1 flex-wrap">
-                  <span className="text-[0.7rem] text-slate-400">{new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}</span>
+                  {m.time && <span className="text-[0.7rem] text-slate-400">{m.time}</span>}
                   {m.role === "bot" && m.mode === "umum" && (
                     <span className="text-[0.65rem] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">{T.agen.umumBadge}</span>
                   )}

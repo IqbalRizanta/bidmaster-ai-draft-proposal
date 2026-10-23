@@ -13,6 +13,7 @@ const STATUS_TONE: Record<string, string> = {
   draf: "bg-slate-100 text-slate-600 border-slate-200",
   dianalisis: "bg-blue-50 text-blue-700 border-blue-200",
   disetujui: "bg-green-50 text-green-700 border-green-200",
+  diunduh: "bg-emerald-50 text-emerald-800 border-emerald-300",
 };
 
 export default function Riwayat() {
@@ -72,14 +73,20 @@ export default function Riwayat() {
   }
 
   async function unduhVersi(id: number, v: number, format: string) {
-    const r = await fetch(`/api/proposals/${id}/versions/${v}/file?format=${format}`, { headers: authHeaders() });
-    if (!r.ok) { setErr(T.umum.cobaLagi); return; }
-    const nama = (r.headers.get("Content-Disposition") ?? "").match(/filename="(.+?)"/)?.[1] ?? `proposal-v${v}.${format}`;
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(await r.blob());
-    a.download = nama;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    setErr("");
+    try {
+      const r = await fetch(`/api/proposals/${id}/versions/${v}/file?format=${format}`, { headers: authHeaders() });
+      if (!r.ok) { toast(T.umum.cobaLagi, "error"); return; }
+      const nama = (r.headers.get("Content-Disposition") ?? "").match(/filename="(.+?)"/)?.[1] ?? `proposal-v${v}.${format}`;
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(await r.blob());
+      a.download = nama;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      toast(`Versi ${v} berhasil diunduh.`, "ok");
+    } catch {
+      toast(T.umum.cobaLagi, "error");
+    }
   }
 
   return (
@@ -172,11 +179,12 @@ export default function Riwayat() {
       </Card>
 
       {confirm !== null && (
-        <div className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4" onClick={() => setConfirm(null)}>
-          <div role="dialog" aria-modal="true" className="bg-white border border-[#C9DDEE] rounded-2xl p-6 max-w-sm w-full anim-pop shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4" onClick={() => setConfirm(null)}
+          onKeyDown={(e) => { if (e.key === "Escape") setConfirm(null); }}>
+          <div role="dialog" aria-modal="true" aria-labelledby="hapus-title" className="bg-white border border-[#C9DDEE] rounded-2xl p-6 max-w-sm w-full anim-pop shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3">
               <span className="w-10 h-10 rounded-xl bg-red-100 text-red-700 flex items-center justify-center shrink-0"><Trash2 size={18} aria-hidden /></span>
-              <p className="text-base text-slate-800 font-semibold">{T.riwayat.hapusTanya}</p>
+              <p id="hapus-title" className="text-base text-slate-800 font-semibold">{T.riwayat.hapusTanya}</p>
             </div>
             <div className="mt-5 flex gap-2 justify-end">
               <Button variant="secondary" size="sm" onClick={() => setConfirm(null)}>{T.riwayat.batal}</Button>

@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { BadgeCheck, Check, Circle, Download, FileCheck2, Landmark, Percent, Sparkles, Tag, Trash2 } from "lucide-react";
-import { Alert, Badge, Button, Card, FieldError, Input, Label, Select, Skeleton, SkeletonRows } from "../components/ui/controls";
+import { Alert, Badge, Button, Card, FieldError, Input, Label, Select, SkeletonRows } from "../components/ui/controls";
 import { toast } from "../components/ui/toast";
 import type { Proposal } from "../lib/proposals";
 import { T } from "../ui-text";
@@ -22,6 +23,7 @@ const ALASAN = ["kontrak lanjutan", "volume besar", "tingkat kesulitan", "negosi
 export default function Step3({ p, setP, refresh, goStep }: {
   p: Proposal; setP: (p: Proposal) => void; refresh: () => void; goStep: (n: number) => void;
 }) {
+  const nav = useNavigate();
   const [rows, setRows] = useState<Row[]>([]);
   const [ring, setRing] = useState<Ringkas | null>(null);
   const [tipe, setTipe] = useState("persen");
@@ -36,6 +38,7 @@ export default function Step3({ p, setP, refresh, goStep }: {
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState("");
   const [legal, setLegal] = useState({ nib: "", npwp: "", akta: "" });
+  const [companyName, setCompanyName] = useState("PT Solusi Teknologi Nusantara");
   const [kurang, setKurang] = useState<string[]>([]);
   const [preview, setPreview] = useState("");
   const [lampS, setLampS] = useState(true);
@@ -43,51 +46,74 @@ export default function Step3({ p, setP, refresh, goStep }: {
   const [sukses, setSukses] = useState("");
   const [versions, setVersions] = useState<{ versi: number; pada?: string }[]>([]);
   const [tried, setTried] = useState(false);
+  const [savedSnapshot, setSavedSnapshot] = useState("");
 
   useEffect(() => {
     setLoading(true);
     api<{ tender: { komponen: { kode: string; nama: string; satuan: string; harga_dasar: number }[] } }>("/api/catalog")
       .then((c) => setKat(c.tender.komponen)).catch(() => setErr(T.umum.cobaLagi));
     api<{ nama: string; peran: string }>("/api/me").then((u) => setRole(u.peran)).catch(() => {});
-    api<{ legalitas: { nib: string; npwp: string; akta: string } }>("/api/company")
-      .then((c) => setLegal(c.legalitas)).catch(() => {});
+    api<{ nama_resmi?: string; legalitas: { nib: string; npwp: string; akta: string } }>("/api/company")
+      .then((c) => {
+        if (c.nama_resmi) setCompanyName(c.nama_resmi);
+        setLegal(c.legalitas);
+      }).catch(() => {});
     api<{ ringkasan: Ringkas; proposal: Proposal }>(`/api/proposals/${p.id}/prices`, { headers: authHeaders() })
       .then((j) => {
-        setRows((j.ringkasan.rows ?? []).map((r) => ({
+        const loadedRows = (j.ringkasan.rows ?? []).map((r) => ({
           ...r,
           alasan: r.alasan ?? "",
           alasan_catatan: r.alasan_catatan ?? "",
-        })));
+        }));
+        setRows(loadedRows);
         setRing(j.ringkasan); setP(j.proposal);
         const d = (j.proposal as unknown as { discount?: { tipe?: string; nilai?: number; alasan?: string } }).discount;
-        // Backend mengirim [] saat belum ada diskon — [] truthy di JS, jadi periksa bentuknya.
+        let lTipe = "persen";
+        let lNilai = 0;
+        let lAlasan = "";
         if (d && typeof d === "object" && !Array.isArray(d)) {
-          setTipe(d.tipe === "nominal" ? "nominal" : "persen");
-          setNilai(Number(d.nilai) || 0);
-          setAlasanD(typeof d.alasan === "string" ? d.alasan : "");
+          lTipe = d.tipe === "nominal" ? "nominal" : "persen";
+          lNilai = Number(d.nilai) || 0;
+          lAlasan = typeof d.alasan === "string" ? d.alasan : "";
+          setTipe(lTipe);
+          setNilai(lNilai);
+          setAlasanD(lAlasan);
         }
+        setSavedSnapshot(JSON.stringify({ rows: loadedRows, tipe: lTipe, nilai: lNilai, alasanD: lAlasan }));
       }).catch((e) => setErr(e instanceof Error ? e.message : T.umum.cobaLagi))
       .finally(() => setLoading(false));
     api<{ ok: boolean; kurang: string[] }>(`/api/proposals/${p.id}/download-check`, { headers: authHeaders() })
       .then((j) => setKurang(j.ok ? [] : j.kurang)).catch(() => {});
     api<{ versions: { versi: number; pada?: string }[] }>(`/api/proposals/${p.id}/versions`, { headers: authHeaders() })
       .then((j) => setVersions(j.versions)).catch(() => {});
-  }, [p.id]);
+  }, [p.id, setP]);
 
   function rpParse(s: string): number {
     const n = parseInt(s.replace(/[^0-9]/g, ""), 10);
     return Number.isNaN(n) ? 0 : n;
   }
 
+  const liveSubtotal = useMemo(() => rows.reduce((acc, r) => acc + (r.harga_proposal * r.qty), 0), [rows]);
+  const liveDiskonRp = useMemo(() => {
+    if (nilai <= 0) return 0;
+    if (tipe === "persen") return Math.round(liveSubtotal * (Math.min(100, Math.max(0, nilai)) / 100));
+    return Math.min(liveSubtotal, Math.max(0, nilai));
+  }, [liveSubtotal, tipe, nilai]);
+  const liveTotal = useMemo(() => Math.max(0, liveSubtotal - liveDiskonRp), [liveSubtotal, liveDiskonRp]);
+  const livePaguOk = p.pagu == null ? true : liveTotal <= p.pagu;
+
+  const currentSnapshot = JSON.stringify({ rows, tipe, nilai, alasanD });
+  const isDirty = savedSnapshot !== "" && savedSnapshot !== currentSnapshot;
+
   const adaDiskon = nilai > 0;
   const alasanRusak = rows.some((r) => r.harga_proposal !== r.harga_acuan && r.alasan.trim() === "");
   const diskonErr = adaDiskon && alasanD.trim() === "" ? T.validasi.diskonAlasanWajib : "";
   const setujuErr = tried && (!centang || oleh.trim() === "") ? T.validasi.setujuWajib : "";
 
-  async function simpan() {
+  async function simpan(): Promise<boolean> {
     setTried(true);
-    if (alasanRusak) { setErr(T.validasi.alasanWajib); toast(T.validasi.alasanWajib, "warn"); return; }
-    if (diskonErr !== "") { setErr(diskonErr); toast(diskonErr, "warn"); return; }
+    if (alasanRusak) { setErr(T.validasi.alasanWajib); toast(T.validasi.alasanWajib, "warn"); return false; }
+    if (diskonErr !== "") { setErr(diskonErr); toast(diskonErr, "warn"); return false; }
     setErr("");
     setBusy(true);
     try {
@@ -101,15 +127,23 @@ export default function Step3({ p, setP, refresh, goStep }: {
       setP(j.proposal);
       setRing(j.ringkasan);
       setRows(j.ringkasan.rows);
+      setSavedSnapshot(JSON.stringify({ rows: j.ringkasan.rows, tipe, nilai, alasanD }));
       toast(T.harga.simpan, "ok");
       const c = await api<{ ok: boolean; kurang: string[] }>(`/api/proposals/${p.id}/download-check`, { headers: authHeaders() });
       setKurang(c.ok ? [] : c.kurang);
+      return true;
     } catch (e) {
       const m = e instanceof Error ? e.message : T.umum.cobaLagi;
       setErr(m); toast(m, "error");
+      return false;
     } finally {
       setBusy(false);
     }
+  }
+
+  async function ensureSaved(): Promise<boolean> {
+    if (!isDirty) return true;
+    return await simpan();
   }
 
   function tambah(kode: string) {
@@ -124,6 +158,7 @@ export default function Step3({ p, setP, refresh, goStep }: {
 
   async function lihatPreview() {
     setErr("");
+    if (!await ensureSaved()) return;
     try {
       const j = await api<{ markdown: string }>(`/api/proposals/${p.id}/preview`, {
         method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
@@ -139,13 +174,14 @@ export default function Step3({ p, setP, refresh, goStep }: {
   /** Cetak lewat portal tersembunyi agar tidak blank. */
   async function cetak() {
     setErr("");
+    if (!await ensureSaved()) return;
     try {
       const j = await api<{ markdown: string }>(`/api/proposals/${p.id}/preview`, {
         method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ lampiran_sumber: lampS, lampiran_klarifikasi: lampK }),
       });
       printMarkdown(j.markdown, `${p.instansi || "Proposal"} · #${p.id}`, {
-        logo: "/NusaTech-Logo.png", company: "PT Solusi Teknologi Nusantara",
+        logo: "/NusaTech-Logo.png", company: companyName,
       });
     } catch (e) {
       const m = e instanceof Error ? e.message : T.umum.cobaLagi;
@@ -155,6 +191,7 @@ export default function Step3({ p, setP, refresh, goStep }: {
 
   async function unduh(format: "docx" | "md") {
     setErr("");
+    if (!await ensureSaved()) return;
     try {
       const r = await fetch(`/api/proposals/${p.id}/export`, {
         method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
@@ -183,14 +220,20 @@ export default function Step3({ p, setP, refresh, goStep }: {
   }
 
   async function unduhVersi(v: number, format: "docx" | "md") {
-    const r = await fetch(`/api/proposals/${p.id}/versions/${v}/file?format=${format}`, { headers: authHeaders() });
-    if (!r.ok) { setErr(T.umum.cobaLagi); return; }
-    const nama = (r.headers.get("Content-Disposition") ?? "").match(/filename="(.+?)"/)?.[1] ?? `proposal-v${v}.${format}`;
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(await r.blob());
-    a.download = nama;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    setErr("");
+    try {
+      const r = await fetch(`/api/proposals/${p.id}/versions/${v}/file?format=${format}`, { headers: authHeaders() });
+      if (!r.ok) { toast(T.umum.cobaLagi, "error"); return; }
+      const nama = (r.headers.get("Content-Disposition") ?? "").match(/filename="(.+?)"/)?.[1] ?? `proposal-v${v}.${format}`;
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(await r.blob());
+      a.download = nama;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      toast(`Versi ${v} berhasil diunduh.`, "ok");
+    } catch {
+      toast(T.umum.cobaLagi, "error");
+    }
   }
 
   const approvals = (p as unknown as { approvals?: { oleh: string }[] }).approvals ?? [];
@@ -202,9 +245,13 @@ export default function Step3({ p, setP, refresh, goStep }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.id, approvals.length]);
 
+  const risikoKurang = (p.items ?? []).some(
+    (it) => it.status === "berisiko" && (!p.decisions?.[it.id] || p.decisions[it.id].putusan === "tanya" || p.decisions[it.id].status_akhir === "berisiko")
+  );
+
   const syarat: { ok: boolean; aksi?: () => void }[] = [
-    { ok: true },
-    { ok: ring?.pagu_ok ?? true, aksi: () => goStep(1) },
+    { ok: !risikoKurang, aksi: () => goStep(2) },
+    { ok: livePaguOk, aksi: () => goStep(1) },
     { ok: legal.nib !== "" && legal.npwp !== "" && legal.akta !== "" },
     { ok: !ring?.perlu_persetujuan || approvals.length > 0 },
   ];
@@ -314,8 +361,8 @@ export default function Step3({ p, setP, refresh, goStep }: {
                   className={`rounded-xl px-3.5 py-2.5 text-sm font-semibold border min-h-11 ${tipe === t ? "border-brand text-brand bg-brand-light" : "border-slate-300 text-slate-600"}`}>
                   {t === "persen" ? T.harga.diskonPersen : T.harga.diskonNominal}</button>
               ))}
-              <Input type="number" min={0} aria-label="Nilai diskon" value={nilai}
-                onChange={(e) => setNilai(Math.max(0, parseInt(e.target.value || "0", 10)))} className="max-w-32 py-1.5" />
+              <Input type="number" min={0} max={tipe === "persen" ? 100 : undefined} aria-label="Nilai diskon" value={nilai}
+                onChange={(e) => setNilai(tipe === "persen" ? Math.min(100, Math.max(0, parseInt(e.target.value || "0", 10))) : Math.max(0, parseInt(e.target.value || "0", 10)))} className="max-w-32 py-1.5" />
             </div>
             <div>
               <Label htmlFor="diskon-alasan">{T.harga.diskonAlasan}</Label>
@@ -326,9 +373,16 @@ export default function Step3({ p, setP, refresh, goStep }: {
           </Card>
 
           {err !== "" && <div role="alert"><Alert kind="error">{err}</Alert></div>}
-          <Button onClick={simpan} disabled={busy} size="lg" className="w-full sm:w-auto">
-            {busy ? T.harga.menyimpan : T.harga.simpan}
-          </Button>
+          <div className="flex items-center gap-3 flex-wrap">
+            <Button onClick={simpan} disabled={busy} size="lg" className="w-full sm:w-auto">
+              {busy ? T.harga.menyimpan : T.harga.simpan}
+            </Button>
+            {isDirty && (
+              <span className="text-xs text-amber-700 font-semibold bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 animate-pulse">
+                Perubahan harga belum disimpan
+              </span>
+            )}
+          </div>
 
           <Card className="space-y-3">
             <div className="flex items-center gap-2">
@@ -397,19 +451,15 @@ export default function Step3({ p, setP, refresh, goStep }: {
         <aside className="space-y-4 lg:sticky lg:top-24 self-start">
           <Card className="space-y-3">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{T.harga.total}</div>
-            {ring ? (
-              <div className="text-3xl font-extrabold text-[#0F1B3D] leading-none">{fmtRp(ring.total)}</div>
-            ) : (
-              <Skeleton className="h-9 w-40" />
-            )}
+            <div className="text-3xl font-extrabold text-[#0F1B3D] leading-none">{fmtRp(liveTotal)}</div>
             <div className="text-xs text-slate-600 space-y-1">
-              <div className="flex justify-between"><span>{T.harga.subtotal}</span><span className="font-semibold text-slate-700">{ring ? fmtRp(ring.subtotal) : "…"}</span></div>
-              <div className="flex justify-between"><span>{T.harga.diskon}</span><span className="font-semibold text-slate-700">{ring ? fmtRp(ring.diskon_rp) : "…"}</span></div>
+              <div className="flex justify-between"><span>{T.harga.subtotal}</span><span className="font-semibold text-slate-700">{fmtRp(liveSubtotal)}</span></div>
+              <div className="flex justify-between"><span>{T.harga.diskon}</span><span className="font-semibold text-slate-700">{fmtRp(liveDiskonRp)}</span></div>
               <div className="flex justify-between"><span>Pagu</span><span className="font-semibold text-slate-700">{p.pagu ? fmtRp(p.pagu) : T.harga.tanpaPagu}</span></div>
             </div>
-            {ring && ring.pagu_ok !== null && (
-              <div className={`text-xs font-semibold rounded-lg px-3 py-2 ${ring.pagu_ok ? "text-green-700 bg-green-50 border border-green-200" : "text-red-700 bg-red-50 border border-red-200"}`}>
-                {ring.pagu_ok ? T.harga.paguDiBawah : T.harga.paguLewat}
+            {p.pagu !== null && p.pagu !== undefined && (
+              <div className={`text-xs font-semibold rounded-lg px-3 py-2 ${livePaguOk ? "text-green-700 bg-green-50 border border-green-200" : "text-red-700 bg-red-50 border border-red-200"}`}>
+                {livePaguOk ? T.harga.paguDiBawah : T.harga.paguLewat}
               </div>
             )}
             <div>
@@ -448,15 +498,16 @@ export default function Step3({ p, setP, refresh, goStep }: {
           </Card>
         </aside>
       </div>
-      {preview !== "" && <PreviewDoc md={preview} onClose={() => setPreview("")} />}
+      {preview !== "" && <PreviewDoc md={preview} onClose={() => setPreview("")} companyName={companyName} />}
     </div>
   );
 
-  function nav0(to: string) { window.location.href = to; }
+  function nav0(to: string) { nav(to); }
 
   async function setujui() {
     setTried(true);
     if (!centang || oleh.trim() === "") { setErr(T.validasi.setujuWajib); toast(T.validasi.setujuWajib, "warn"); return; }
+    if (!await ensureSaved()) return;
     setErr("");
     try {
       const j = await api<{ proposal: Proposal }>(`/api/proposals/${p.id}/approve`, {
@@ -473,14 +524,23 @@ export default function Step3({ p, setP, refresh, goStep }: {
   }
 }
 
-function PreviewDoc({ md: markdown, onClose }: { md: string; onClose: () => void }) {
+function PreviewDoc({ md: markdown, onClose, companyName }: { md: string; onClose: () => void; companyName: string }) {
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleEsc);
+    return () => window.removeEventListener("keydown", handleEsc);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-[80] bg-black/70 overflow-y-auto p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[80] bg-black/70 overflow-y-auto p-4" onClick={onClose}
+      role="dialog" aria-modal="true" aria-label={T.harga.pratinjau}>
       <div className="bg-white text-slate-900 max-w-3xl mx-auto rounded-xl my-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2 p-4 border-b sticky top-0 bg-white rounded-t-xl z-10">
           <h2 className="font-bold flex-1">{T.harga.pratinjau}</h2>
           <Button size="sm" variant="secondary" onClick={onClose}>{T.harga.kembaliPerbaiki}</Button>
-          <Button size="sm" variant="secondary" onClick={() => printMarkdown(markdown, T.harga.pratinjau, { logo: "/NusaTech-Logo.png", company: "PT Solusi Teknologi Nusantara" })}>{T.harga.unduhCetak}</Button>
+          <Button size="sm" variant="secondary" onClick={() => printMarkdown(markdown, T.harga.pratinjau, { logo: "/NusaTech-Logo.png", company: companyName })}>{T.harga.unduhCetak}</Button>
         </div>
         <div className="p-8 text-[0.95rem] leading-relaxed chat-md" dangerouslySetInnerHTML={{ __html: mdToHtml(markdown) }} />
       </div>

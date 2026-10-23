@@ -1,6 +1,6 @@
 import { Suspense, lazy } from "react";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
-import { AuthProvider } from "./auth";
+import { AuthProvider, RequireAuth } from "./auth";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Footer } from "./components/Footer";
 import { Nav } from "./components/Nav";
@@ -41,11 +41,11 @@ function Shell() {
         <Suspense fallback={<Loading />}>
           <Routes>
             <Route path="/login" element={<Login />} />
-            <Route path="/app" element={<Proposal />} />
-            <Route path="/app/:id" element={<Proposal />} />
-            <Route path="/bob" element={<Bob />} />
-            <Route path="/riwayat" element={<Riwayat />} />
-            <Route path="*" element={<Proposal />} />
+            <Route path="/app" element={<RequireAuth><Proposal /></RequireAuth>} />
+            <Route path="/app/:id" element={<RequireAuth><Proposal /></RequireAuth>} />
+            <Route path="/bob" element={<RequireAuth><Bob /></RequireAuth>} />
+            <Route path="/riwayat" element={<RequireAuth><Riwayat /></RequireAuth>} />
+            <Route path="*" element={<RequireAuth><Proposal /></RequireAuth>} />
           </Routes>
         </Suspense>
       </div>

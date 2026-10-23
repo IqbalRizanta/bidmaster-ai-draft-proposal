@@ -2,7 +2,7 @@
 export function mdToHtml(text: string): string {
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   let s = esc(text);
-  s = s.replace(/```[\w]*\n?([\s\S]*?)```/g, (_, c: string) => `<pre><code>${esc(c.replace(/\n$/, ""))}</code></pre>`);
+  s = s.replace(/```[\w]*\n?([\s\S]*?)```/g, (_, c: string) => `<pre><code>${c.replace(/\n$/, "")}</code></pre>`);
   s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
   s = s.replace(/^### (.+)$/gm, "<h3>$1</h3>").replace(/^## (.+)$/gm, "<h2>$1</h2>").replace(/^# (.+)$/gm, "<h1>$1</h1>");
   s = s.replace(/^&gt; (.+)$/gm, "<blockquote>$1</blockquote>");
