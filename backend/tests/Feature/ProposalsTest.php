@@ -8,6 +8,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
+use PhpOffice\PhpWord\PhpWord;
 use Tests\TestCase;
 
 class ProposalsTest extends TestCase
@@ -59,7 +60,7 @@ class ProposalsTest extends TestCase
     {
         $svc = app(DocumentParserService::class);
         $tmp = tempnam(sys_get_temp_dir(), 't').'.docx';
-        $w = new \PhpOffice\PhpWord\PhpWord;
+        $w = new PhpWord;
         $s = $w->addSection();
         $s->addText('Paragraf pertama');
         $s->addText('Paragraf kedua');
@@ -87,18 +88,18 @@ class ProposalsTest extends TestCase
     private function miniPdf(array $lines): string
     {
         $objs = [];
-        $objs[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+        $objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
         $kids = [];
         $n = 3;
         foreach ($lines as $i => $text) {
             $stream = "BT /F1 12 Tf 72 720 Td ({$text}) Tj ET";
-            $objs[$n + 1] = "<< /Length ".strlen($stream)." >>\nstream\n{$stream}\nendstream";
-            $objs[$n] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ".($n + 1)." 0 R /Resources << /Font << /F1 7 0 R >> >> >>";
+            $objs[$n + 1] = '<< /Length '.strlen($stream)." >>\nstream\n{$stream}\nendstream";
+            $objs[$n] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents '.($n + 1).' 0 R /Resources << /Font << /F1 7 0 R >> >> >>';
             $kids[] = "{$n} 0 R";
             $n += 2;
         }
-        $objs[2] = "<< /Type /Pages /Kids [".implode(' ', $kids)."] /Count ".count($lines)." >>";
-        $objs[7] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+        $objs[2] = '<< /Type /Pages /Kids ['.implode(' ', $kids).'] /Count '.count($lines).' >>';
+        $objs[7] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
         $out = "%PDF-1.4\n";
         $off = [];
         for ($i = 1; $i <= 7; $i++) {
@@ -144,8 +145,8 @@ class ProposalsTest extends TestCase
     public function test_hapus_pendukung_berdasarkan_index(): void
     {
         [$p, $h] = $this->buat($this->token());
-        $a = UploadedFile::fake()->createWithContent('dukungan_a.txt', "Dokumen A");
-        $b = UploadedFile::fake()->createWithContent('dukungan_b.txt', "Dokumen B");
+        $a = UploadedFile::fake()->createWithContent('dukungan_a.txt', 'Dokumen A');
+        $b = UploadedFile::fake()->createWithContent('dukungan_b.txt', 'Dokumen B');
         $this->post("/api/proposals/{$p['id']}/upload", ['kind' => 'pendukung', 'file' => $a], $h)->assertOk();
         $this->post("/api/proposals/{$p['id']}/upload", ['kind' => 'pendukung', 'file' => $b], $h)->assertOk();
 
@@ -167,13 +168,13 @@ class ProposalsTest extends TestCase
         $this->post("/api/proposals/{$p['id']}/upload", ['kind' => 'requirement', 'file' => $f], $h)->assertOk();
         $items = [
             ['id' => 'B1', 'kategori' => 'Teknis', 'requirement' => 'Backend API',
-             'kutipan' => 'Pengembangan backend API', 'sumber_klien' => ['baris' => 1],
-             'sumber_knowledge' => ['K11'], 'status' => 'sesuai', 'alasan' => 'Cocok.',
-             'keyakinan' => 'tinggi', 'komponen_usulan' => [['kode' => 'DEV-BE', 'qty' => 5]]],
+                'kutipan' => 'Pengembangan backend API', 'sumber_klien' => ['baris' => 1],
+                'sumber_knowledge' => ['K11'], 'status' => 'sesuai', 'alasan' => 'Cocok.',
+                'keyakinan' => 'tinggi', 'komponen_usulan' => [['kode' => 'DEV-BE', 'qty' => 5]]],
             ['id' => 'B2', 'kategori' => 'Keamanan', 'requirement' => 'ISO',
-             'kutipan' => 'Kutipan yang tidak ada di dokumen', 'sumber_klien' => ['baris' => 99],
-             'sumber_knowledge' => ['K01'], 'status' => 'sesuai', 'alasan' => 'Dugaan.',
-             'keyakinan' => 'tinggi', 'komponen_usulan' => []],
+                'kutipan' => 'Kutipan yang tidak ada di dokumen', 'sumber_klien' => ['baris' => 99],
+                'sumber_knowledge' => ['K01'], 'status' => 'sesuai', 'alasan' => 'Dugaan.',
+                'keyakinan' => 'tinggi', 'komponen_usulan' => []],
         ];
         $text = '```json'.json_encode($items).'```';
         $payload = ['outputs' => [['outputs' => [['results' => ['message' => ['text' => $text]]]]]]];

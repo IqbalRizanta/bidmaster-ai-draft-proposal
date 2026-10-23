@@ -6,12 +6,20 @@ use App\Models\Proposal;
 use App\Repositories\Contracts\AuditRepository;
 use App\Services\AnalysisService;
 use App\Services\DocumentParserService;
+use App\Services\DocumentService;
+use App\Services\DocxExportService;
 use App\Services\KnowledgeService;
 use App\Services\LangflowService;
+use App\Services\PriceService;
+use App\Services\ProposalDocxService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class ProposalsController
 {
+    private ?array $cachedCompanyFull = null;
+
     public function __construct(
         private AuditRepository $audits,
         private DocumentParserService $parser,
@@ -47,7 +55,8 @@ class ProposalsController
     public function index(Request $request)
     {
         $u = $request->attributes->get('member');
-        $q = Proposal::orderByDesc('updated_at');
+        $q = Proposal::select(['id', 'instansi', 'status', 'updated_at', 'member_id', 'current_version'])
+            ->orderByDesc('updated_at');
         if ($u['peran'] !== 'admin') {
             $q->where('member_id', $u['id']);
         }
@@ -138,16 +147,21 @@ class ProposalsController
         if (array_key_exists('jenis_instansi', $d)) {
             $patch['jenis_instansi'] = mb_substr((string) $d['jenis_instansi'], 0, 40);
         }
+        $paguChanged = false;
         if (array_key_exists('pagu', $d)) {
             $pg = $d['pagu'];
             if ($pg === null || $pg === '') {
-                $patch['pagu'] = null;
+                $newPagu = null;
             } else {
                 $pg = filter_var($pg, FILTER_VALIDATE_INT);
                 if ($pg === false || $pg < 0 || $pg > 10_000_000_000) {
                     return response()->json(['error' => 'Pagu 0-10Miliar.', 'field' => 'pagu'], 400);
                 }
-                $patch['pagu'] = $pg;
+                $newPagu = $pg;
+            }
+            if ($newPagu !== $proposal->pagu) {
+                $patch['pagu'] = $newPagu;
+                $paguChanged = true;
             }
         }
         if (array_key_exists('durasi_minggu', $d)) {
@@ -156,6 +170,9 @@ class ProposalsController
                 return response()->json(['error' => 'Durasi 1-52 minggu.', 'field' => 'durasi'], 400);
             }
             $patch['durasi_minggu'] = $dur;
+        }
+        if ($paguChanged) {
+            $patch['approvals'] = [];
         }
         if ($patch !== []) {
             $proposal->fill($patch)->save();
@@ -196,32 +213,36 @@ class ProposalsController
         } catch (\InvalidArgumentException $e) {
             return response()->json(['error' => $e->getMessage(), 'field' => 'file'], 422);
         }
-        if ($kind === 'requirement') {
-            $proposal->req_nama = $parsed['nama'];
-            $proposal->req_teks = implode("\n", array_map(fn ($unit) => $unit['teks'], $parsed['units']));
-            $proposal->req_satuan = $parsed['satuan'];
-            $proposal->req_jumlah = $parsed['jumlah'];
-            $proposal->req_units = array_map(fn ($unit) => [
-                'label' => $unit['label'], 'teks' => $unit['teks'],
-                'halaman' => $unit['halaman'] ?? null, 'paragraf' => $unit['paragraf'] ?? null,
-            ], $parsed['units']);
-            $proposal->items = [];
-            $proposal->decisions = [];
-            $proposal->approvals = [];
-            $proposal->status = 'draf';
-        } else {
-            $pend = $proposal->pendukung ?? [];
-            $pend[] = ['nama' => $parsed['nama'], 'satuan' => $parsed['satuan'],
-                'jumlah' => $parsed['jumlah'], 'units' => $parsed['units']];
-            $proposal->pendukung = array_slice($pend, -5);
-        }
-        $proposal->save();
-        $u = $request->attributes->get('member');
-        $this->audits->log($u['id'], 'proposal_ubah', "#{$proposal->id} upload {$kind} {$parsed['nama']}");
 
-        return response()->json(['proposal' => $this->full($proposal->fresh()),
-            'file' => ['nama' => $parsed['nama'], 'satuan' => $parsed['satuan'],
-                'jumlah' => $parsed['jumlah'], 'status' => 'berhasil dibaca']]);
+        return DB::transaction(function () use ($proposal, $kind, $parsed, $request) {
+            $locked = Proposal::where('id', $proposal->id)->lockForUpdate()->first();
+            if ($kind === 'requirement') {
+                $locked->req_nama = $parsed['nama'];
+                $locked->req_teks = implode("\n", array_map(fn ($unit) => $unit['teks'], $parsed['units']));
+                $locked->req_satuan = $parsed['satuan'];
+                $locked->req_jumlah = $parsed['jumlah'];
+                $locked->req_units = array_map(fn ($unit) => [
+                    'label' => $unit['label'], 'teks' => $unit['teks'],
+                    'halaman' => $unit['halaman'] ?? null, 'paragraf' => $unit['paragraf'] ?? null,
+                ], $parsed['units']);
+                $locked->items = [];
+                $locked->decisions = [];
+                $locked->approvals = [];
+                $locked->status = 'draf';
+            } else {
+                $pend = $locked->pendukung ?? [];
+                $pend[] = ['nama' => $parsed['nama'], 'satuan' => $parsed['satuan'],
+                    'jumlah' => $parsed['jumlah'], 'units' => $parsed['units']];
+                $locked->pendukung = array_slice($pend, -5);
+            }
+            $locked->save();
+            $u = $request->attributes->get('member');
+            $this->audits->log($u['id'], 'proposal_ubah', "#{$locked->id} upload {$kind} {$parsed['nama']}");
+
+            return response()->json(['proposal' => $this->full($locked->fresh()),
+                'file' => ['nama' => $parsed['nama'], 'satuan' => $parsed['satuan'],
+                    'jumlah' => $parsed['jumlah'], 'status' => 'berhasil dibaca']]);
+        });
     }
 
     public function deleteFile(Request $request, Proposal $proposal)
@@ -323,6 +344,37 @@ class ProposalsController
                 $label = $u['label'];
                 break;
             }
+            if ($halaman === null && $paragraf !== null && ($u['paragraf'] ?? null) == (int) $paragraf && ($u['halaman'] ?? null) === null) {
+                $idx = $i;
+                $label = $u['label'];
+                break;
+            }
+        }
+        if ($idx === null && ! empty($proposal->pendukung)) {
+            foreach ($proposal->pendukung as $dok) {
+                $dokUnits = $dok['units'] ?? [];
+                foreach ($dokUnits as $i => $u) {
+                    if ($baris !== null && ($u['label'] ?? '') === 'baris '.(int) $baris) {
+                        $idx = $i;
+                        $label = ($dok['nama'] ?? 'Pendukung').': '.$u['label'];
+                        $units = $dokUnits;
+                        break 2;
+                    }
+                    if ($halaman !== null && ($u['halaman'] ?? null) == (int) $halaman
+                        && ($u['paragraf'] ?? null) == (int) $paragraf) {
+                        $idx = $i;
+                        $label = ($dok['nama'] ?? 'Pendukung').': '.$u['label'];
+                        $units = $dokUnits;
+                        break 2;
+                    }
+                    if ($halaman === null && $paragraf !== null && ($u['paragraf'] ?? null) == (int) $paragraf && ($u['halaman'] ?? null) === null) {
+                        $idx = $i;
+                        $label = ($dok['nama'] ?? 'Pendukung').': '.$u['label'];
+                        $units = $dokUnits;
+                        break 2;
+                    }
+                }
+            }
         }
         if ($idx === null) {
             return response()->json(['error' => 'Sumber tidak ditemukan di dokumen.'], 404);
@@ -346,43 +398,47 @@ class ProposalsController
         if (! in_array($putusan, ['benar', 'ubah', 'tanya'], true)) {
             return response()->json(['error' => 'Putusan harus benar/ubah/tanya.', 'field' => 'putusan'], 400);
         }
-        $items = $proposal->items ?? [];
-        $found = null;
-        foreach ($items as $it) {
-            if (($it['id'] ?? '') === $item) {
-                $found = $it;
-                break;
-            }
-        }
-        if (! $found) {
-            return response()->json(['error' => 'Butir tidak ditemukan.'], 404);
-        }
         $alasan = mb_substr(trim((string) ($d['alasan'] ?? '')), 0, 300);
-        if ($putusan === 'ubah') {
-            $status = $d['status'] ?? '';
-            if (! in_array($status, ['sesuai', 'sebagian', 'berisiko'], true)) {
-                return response()->json(['error' => 'Status harus Sesuai/Sebagian/Berisiko.', 'field' => 'status'], 400);
-            }
-            if ($alasan === '') {
-                return response()->json(['error' => 'Alasan wajib diisi saat mengubah status.', 'field' => 'alasan'], 400);
-            }
-        } else {
-            $status = $found['status'];
-        }
-        $decisions = $proposal->decisions ?? [];
-        $decisions[$item] = ['putusan' => $putusan, 'status_awal' => $found['status'],
-            'status_akhir' => $putusan === 'tanya' ? $found['status'] : $status,
-            'alasan' => $alasan,
-            'catatan' => mb_substr(trim((string) ($d['catatan'] ?? '')), 0, 500),
-            'pertanyaan' => $putusan === 'tanya' ? mb_substr(trim((string) ($d['pertanyaan'] ?? $alasan)), 0, 300) : '',
-            'oleh' => $u['nama'], 'pada' => date('c')];
-        $proposal->decisions = $decisions;
-        $proposal->approvals = [];
-        $proposal->save();
-        $this->audits->log($u['id'], 'keputusan',
-            "#{$proposal->id} {$item}: {$found['status']} → {$decisions[$item]['status_akhir']} ({$putusan}) {$alasan}");
 
-        return response()->json(['proposal' => $this->full($proposal->fresh())]);
+        return DB::transaction(function () use ($proposal, $item, $putusan, $d, $alasan, $u) {
+            $locked = Proposal::where('id', $proposal->id)->lockForUpdate()->first();
+            $items = $locked->items ?? [];
+            $found = null;
+            foreach ($items as $it) {
+                if (($it['id'] ?? '') === $item) {
+                    $found = $it;
+                    break;
+                }
+            }
+            if (! $found) {
+                return response()->json(['error' => 'Butir tidak ditemukan.'], 404);
+            }
+            if ($putusan === 'ubah') {
+                $status = $d['status'] ?? '';
+                if (! in_array($status, ['sesuai', 'sebagian', 'berisiko'], true)) {
+                    return response()->json(['error' => 'Status harus Sesuai/Sebagian/Berisiko.', 'field' => 'status'], 400);
+                }
+                if ($alasan === '') {
+                    return response()->json(['error' => 'Alasan wajib diisi saat mengubah status.', 'field' => 'alasan'], 400);
+                }
+            } else {
+                $status = $found['status'];
+            }
+            $decisions = $locked->decisions ?? [];
+            $decisions[$item] = ['putusan' => $putusan, 'status_awal' => $found['status'],
+                'status_akhir' => $putusan === 'tanya' ? $found['status'] : $status,
+                'alasan' => $alasan,
+                'catatan' => mb_substr(trim((string) ($d['catatan'] ?? '')), 0, 500),
+                'pertanyaan' => $putusan === 'tanya' ? mb_substr(trim((string) ($d['pertanyaan'] ?? $alasan)), 0, 300) : '',
+                'oleh' => $u['nama'], 'pada' => date('c')];
+            $locked->decisions = $decisions;
+            $locked->approvals = [];
+            $locked->save();
+            $this->audits->log($u['id'], 'keputusan',
+                "#{$locked->id} {$item}: {$found['status']} → {$decisions[$item]['status_akhir']} ({$putusan}) {$alasan}");
+
+            return response()->json(['proposal' => $this->full($locked->fresh())]);
+        });
     }
 
     public function approveSesuai(Request $request, Proposal $proposal)
@@ -435,8 +491,9 @@ class ProposalsController
             return response()->json(['error' => 'Mesin analisis belum dikonfigurasi.', 'code' => 'LF_NOT_CONFIGURED'], 503);
         }
         $started = microtime(true);
+        $sessionId = 'proposal-'.$proposal->id.'-'.Str::uuid();
         $result = $this->lf->run($this->analysis->prompt($proposal), $this->lf->flow(),
-            'proposal-'.$proposal->id, $this->analysis->templateOverride());
+            $sessionId, $this->analysis->templateOverride());
         $fallback = false;
         if (! $result['ok']) {
             // Mode darurat: pengguna memilih lanjut tanpa AI saat mesin mati.
@@ -459,6 +516,9 @@ class ProposalsController
             $checked = $this->analysis->validateItems($proposal, $raw);
         }
         $proposal->items = $checked['items'];
+        $proposal->decisions = [];
+        $proposal->approvals = [];
+        $proposal->prices = [];
         $proposal->status = 'dianalisis';
         $proposal->save();
         $u = $request->attributes->get('member');
@@ -472,7 +532,7 @@ class ProposalsController
                 'waktu_detik' => (int) round(microtime(true) - $started)]]);
     }
 
-    public function prices(Request $request, Proposal $proposal, \App\Services\PriceService $harga)
+    public function prices(Request $request, Proposal $proposal, PriceService $harga)
     {
         if (! $this->own($request, $proposal)) {
             return response()->json(['error' => 'Akses ditolak untuk peran ini.'], 403);
@@ -484,10 +544,10 @@ class ProposalsController
 
         return response()->json(['proposal' => $this->full($proposal->fresh()),
             'ringkasan' => $harga->ringkasan($proposal->fresh()),
-            'alasan_valid' => \App\Services\PriceService::ALASAN]);
+            'alasan_valid' => PriceService::ALASAN]);
     }
 
-    public function pricesUpdate(Request $request, Proposal $proposal, \App\Services\PriceService $harga)
+    public function pricesUpdate(Request $request, Proposal $proposal, PriceService $harga)
     {
         if (! $this->own($request, $proposal)) {
             return response()->json(['error' => 'Akses ditolak untuk peran ini.'], 403);
@@ -495,24 +555,33 @@ class ProposalsController
         $u = $request->attributes->get('member');
         $d = $request->isJson() ? $request->json()->all() : [];
         $kat = $harga->katalog();
+        $inputRows = (array) ($d['rows'] ?? []);
+        if (count($inputRows) > 20) {
+            return response()->json(['error' => 'Maksimal 20 baris komponen.', 'field' => 'rows'], 400);
+        }
         $rows = [];
-        foreach ((array) ($d['rows'] ?? []) as $r) {
+        $seen = [];
+        foreach ($inputRows as $r) {
             if (! is_array($r) || ! isset($kat[$r['kode'] ?? ''])) {
                 return response()->json(['error' => 'Kode komponen tidak dikenal.', 'field' => 'rows'], 400);
             }
             $k = $kat[$r['kode']];
+            if (isset($seen[$k['kode']])) {
+                return response()->json(['error' => "Komponen {$k['kode']} duplikat.", 'field' => 'rows'], 400);
+            }
+            $seen[$k['kode']] = true;
             $qty = filter_var($r['qty'] ?? 0, FILTER_VALIDATE_INT);
             if ($qty === false || $qty < 1 || $qty > 1000) {
                 return response()->json(['error' => "Qty {$k['kode']} 1-1000.", 'field' => 'qty'], 400);
             }
             $hp = $r['harga_proposal'] ?? null;
-            if (! is_numeric($hp) || (int) $hp < 0 || (int) $hp > \App\Services\PriceService::MAX_BARIS) {
+            if (! is_numeric($hp) || (int) $hp < 0 || (int) $hp > PriceService::MAX_BARIS) {
                 return response()->json(['error' => "Harga {$k['kode']} harus bilangan bulat 0-10M.", 'field' => 'harga'], 400);
             }
             $hp = (int) $hp;
             $alasan = mb_substr(trim((string) ($r['alasan'] ?? '')), 0, 40);
             if ($hp !== $k['harga_acuan']) {
-                if (! in_array($alasan, \App\Services\PriceService::ALASAN, true)) {
+                if (! in_array($alasan, PriceService::ALASAN, true)) {
                     return response()->json(['error' => "Alasan wajib untuk {$k['kode']} (beda dari acuan).", 'field' => 'alasan'], 400);
                 }
             }
@@ -520,9 +589,6 @@ class ProposalsController
                 'qty' => $qty, 'harga_acuan' => $k['harga_acuan'], 'harga_proposal' => $hp,
                 'alasan' => $hp !== $k['harga_acuan'] ? $alasan : '',
                 'alasan_catatan' => mb_substr(trim((string) ($r['alasan_catatan'] ?? '')), 0, 200)];
-            if (count($rows) > 20) {
-                break;
-            }
         }
         if ($rows === []) {
             return response()->json(['error' => 'Minimal 1 baris komponen.', 'field' => 'rows'], 400);
@@ -584,33 +650,46 @@ class ProposalsController
 
     private function companyFull(): array
     {
+        if ($this->cachedCompanyFull !== null) {
+            return $this->cachedCompanyFull;
+        }
         $data = $this->knowledge->json('perusahaan.json');
         $profil = mb_substr(trim($this->knowledge->read('knowledge_perusahaan.md')), 0, 1200);
 
-        return ['data' => $data, 'profil' => $profil];
+        return $this->cachedCompanyFull = ['data' => $data, 'profil' => $profil];
     }
 
     private function logoPath(): string
     {
-        return \App\Services\DocxExportService::logoPath();
+        return DocxExportService::logoPath();
     }
 
     /** @return array{ok:bool,kurang:list<string>} */
-    private function syaratUnduh(Proposal $proposal, \App\Services\PriceService $harga): array
+    private function syaratUnduh(Proposal $proposal, PriceService $harga): array
     {
         $kurang = [];
         $items = $proposal->items ?? [];
         $decisions = $proposal->decisions ?? [];
+        if ($items === []) {
+            $kurang[] = 'Dokumen requirement belum dianalisis';
+        }
         $risiko = 0;
         foreach ($items as $it) {
-            if (($it['status'] ?? '') === 'berisiko' && ! isset($decisions[$it['id'] ?? ''])) {
-                $risiko++;
+            $id = $it['id'] ?? '';
+            $dec = $decisions[$id] ?? null;
+            if (($it['status'] ?? '') === 'berisiko') {
+                if (! $dec || ($dec['putusan'] ?? '') === 'tanya' || ($dec['status_akhir'] ?? '') === 'berisiko') {
+                    $risiko++;
+                }
             }
         }
         if ($items !== [] && $risiko > 0) {
-            $kurang[] = "{$risiko} butir Berisiko belum diputuskan";
+            $kurang[] = "{$risiko} butir Berisiko belum diputuskan atau belum selesai";
         }
         $ring = $harga->ringkasan($proposal);
+        if (($proposal->prices ?? []) === [] || ($ring['subtotal'] ?? 0) <= 0) {
+            $kurang[] = 'Komponen harga belum ditentukan';
+        }
         if ($ring['pagu_ok'] === false) {
             $kurang[] = 'Total melewati pagu';
         }
@@ -627,7 +706,7 @@ class ProposalsController
         return ['ok' => $kurang === [], 'kurang' => $kurang, 'ringkasan' => $ring];
     }
 
-    public function downloadCheck(Request $request, Proposal $proposal, \App\Services\PriceService $harga)
+    public function downloadCheck(Request $request, Proposal $proposal, PriceService $harga)
     {
         if (! $this->own($request, $proposal)) {
             return response()->json(['error' => 'Akses ditolak untuk peran ini.'], 403);
@@ -637,7 +716,7 @@ class ProposalsController
     }
 
     public function preview(Request $request, Proposal $proposal,
-        \App\Services\PriceService $harga, \App\Services\DocumentService $docs)
+        PriceService $harga, DocumentService $docs)
     {
         if (! $this->own($request, $proposal)) {
             return response()->json(['error' => 'Akses ditolak untuk peran ini.'], 403);
@@ -648,7 +727,7 @@ class ProposalsController
         return response()->json(['markdown' => $docs->build($snap)['markdown']]);
     }
 
-    private function snapshot(Proposal $proposal, \App\Services\PriceService $harga, array $options): array
+    private function snapshot(Proposal $proposal, PriceService $harga, array $options): array
     {
         $decisions = $proposal->decisions ?? [];
         $klarifikasi = [];
@@ -678,8 +757,8 @@ class ProposalsController
     }
 
     public function exportProposal(Request $request, Proposal $proposal,
-        \App\Services\PriceService $harga, \App\Services\DocumentService $docs,
-        \App\Services\ProposalDocxService $docx)
+        PriceService $harga, DocumentService $docs,
+        ProposalDocxService $docx)
     {
         if (! $this->own($request, $proposal)) {
             return response()->json(['error' => 'Akses ditolak untuk peran ini.'], 403);
@@ -690,32 +769,36 @@ class ProposalsController
         if (! in_array($format, ['docx', 'md'], true)) {
             return response()->json(['error' => 'Format harus docx/md.'], 400);
         }
-        $cek = $this->syaratUnduh($proposal, $harga);
-        if (! $cek['ok']) {
-            return response()->json(['error' => 'Syarat belum terpenuhi.', 'kurang' => $cek['kurang'],
-                'field' => 'syarat'], 422);
-        }
-        $snap = $this->snapshot($proposal, $harga, $d);
-        $built = $docs->build($snap);
-        $versi = $proposal->current_version + 1;
-        $proposal->versions()->create(['versi' => $versi, 'snapshot' => $snap]);
-        $proposal->current_version = $versi;
-        $proposal->status = 'diunduh';
-        $proposal->save();
-        $nama = pathinfo($built['nama_file'], PATHINFO_FILENAME).'.'.$format;
-        $this->audits->log($u['id'], 'export', "#{$proposal->id} v{$versi} {$format} {$nama}");
 
-        if ($format === 'md') {
-            return response($built['markdown'], 200, [
-                'Content-Type' => 'text/markdown; charset=utf-8',
+        return DB::transaction(function () use ($proposal, $harga, $docs, $docx, $u, $d, $format) {
+            $locked = Proposal::where('id', $proposal->id)->lockForUpdate()->first();
+            $cek = $this->syaratUnduh($locked, $harga);
+            if (! $cek['ok']) {
+                return response()->json(['error' => 'Syarat belum terpenuhi.', 'kurang' => $cek['kurang'],
+                    'field' => 'syarat'], 422);
+            }
+            $snap = $this->snapshot($locked, $harga, $d);
+            $built = $docs->build($snap);
+            $versi = $locked->current_version + 1;
+            $locked->versions()->create(['versi' => $versi, 'snapshot' => $snap]);
+            $locked->current_version = $versi;
+            $locked->status = 'diunduh';
+            $locked->save();
+            $nama = pathinfo($built['nama_file'], PATHINFO_FILENAME).'.'.$format;
+            $this->audits->log($u['id'], 'export', "#{$locked->id} v{$versi} {$format} {$nama}");
+
+            if ($format === 'md') {
+                return response($built['markdown'], 200, [
+                    'Content-Type' => 'text/markdown; charset=utf-8',
+                    'Content-Disposition' => "attachment; filename=\"{$nama}\"",
+                ]);
+            }
+
+            return response($docx->toBytes($snap, $this->logoPath()), 200, [
+                'Content-Type' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                 'Content-Disposition' => "attachment; filename=\"{$nama}\"",
             ]);
-        }
-
-        return response($docx->toBytes($snap, $this->logoPath()), 200, [
-            'Content-Type' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            'Content-Disposition' => "attachment; filename=\"{$nama}\"",
-        ]);
+        });
     }
 
     public function versions(Request $request, Proposal $proposal)
@@ -729,7 +812,7 @@ class ProposalsController
     }
 
     public function versionFile(Request $request, Proposal $proposal, int $versi,
-        \App\Services\DocumentService $docs, \App\Services\ProposalDocxService $docx)
+        DocumentService $docs, ProposalDocxService $docx)
     {
         if (! $this->own($request, $proposal)) {
             return response()->json(['error' => 'Akses ditolak untuk peran ini.'], 403);

@@ -5,6 +5,7 @@ namespace Tests\Feature\Security;
 use App\Models\Member;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class ValidationTest extends TestCase
@@ -38,7 +39,7 @@ class ValidationTest extends TestCase
         $this->assertTrue($r->json('korporat.gate.passed'));
     }
 
-    #[\PHPUnit\Framework\Attributes\DataProvider('invalidCases')]
+    #[DataProvider('invalidCases')]
     public function test_draft_invalid_400_per_field(array $patch, string $field): void
     {
         $t = $this->token();

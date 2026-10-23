@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Security;
 
+use App\Models\ApiToken;
 use App\Models\Member;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
@@ -52,7 +53,7 @@ class AuthenticationTest extends TestCase
     {
         $m = $this->user();
         $tok = 'kadaluarsa-test-token-1234567890abcdef';
-        \App\Models\ApiToken::create(['token' => hash('sha256', $tok),
+        ApiToken::create(['token' => hash('sha256', $tok),
             'member_id' => $m->id, 'expires_at' => time() - 10]);
         $this->getJson('/api/me', ['Authorization' => "Bearer {$tok}"])->assertStatus(401);
     }
@@ -63,5 +64,29 @@ class AuthenticationTest extends TestCase
         $tok = $this->postJson('/api/login', ['nama' => 'tester', 'pw' => 'rahasia123'])->json('token');
         $this->assertDatabaseMissing('api_tokens', ['token' => $tok]);
         $this->assertDatabaseHas('api_tokens', ['token' => hash('sha256', $tok)]);
+    }
+
+    public function test_artisan_reset_admin_password(): void
+    {
+        $this->user('admin');
+        $this->artisan('bidmaster:admin-password passbaru123')
+            ->assertExitCode(0);
+
+        $this->postJson('/api/login', ['nama' => 'tester', 'pw' => 'passbaru123'])
+            ->assertOk();
+    }
+
+    public function test_token_prune_expired(): void
+    {
+        $m = $this->user();
+        ApiToken::create([
+            'token' => hash('sha256', 'old-tok'),
+            'member_id' => $m->id,
+            'expires_at' => time() - 3600,
+        ]);
+        $this->assertDatabaseHas('api_tokens', ['token' => hash('sha256', 'old-tok')]);
+
+        $this->postJson('/api/login', ['nama' => 'tester', 'pw' => 'rahasia123'])->assertOk();
+        $this->assertDatabaseMissing('api_tokens', ['token' => hash('sha256', 'old-tok')]);
     }
 }
