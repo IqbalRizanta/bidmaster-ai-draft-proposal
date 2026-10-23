@@ -27,7 +27,8 @@ class KnowledgeService
             $txt = file_get_contents($p);
         } else {
             $stem = pathinfo($name, PATHINFO_FILENAME).'.example';
-            $txt = file_get_contents($this->dir.DIRECTORY_SEPARATOR.$stem);
+            $pExample = $this->dir.DIRECTORY_SEPARATOR.$stem;
+            $txt = is_file($pExample) ? file_get_contents($pExample) : '';
         }
         // Strip header sanitasi "# CONTOH ..." sampai baris kosong pertama.
         if (str_starts_with(ltrim($txt), '# CONTOH')) {
@@ -47,8 +48,6 @@ class KnowledgeService
      * Baca JSON dengan fallback .example
      * (mis. perusahaan.json -> perusahaan.example). Untuk file YAML,
      * teruskan apa adanya karena read() sudah fallback sendiri.
-     *
-     * @return array
      */
     public function json(string $name): array
     {
@@ -77,5 +76,11 @@ class KnowledgeService
             'company' => $this->read('tender_company.md'),
             'team' => Yaml::parse($this->read('tender_team.yaml')),
         ];
+    }
+
+    /** Teks ringkasan kapabilitas perusahaan K01-K18 */
+    public function knowledgePerusahaan(): string
+    {
+        return $this->read('knowledge_perusahaan.md');
     }
 }

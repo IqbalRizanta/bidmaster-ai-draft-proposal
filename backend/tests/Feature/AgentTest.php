@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Member;
+use App\Models\Proposal;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Hash;
@@ -66,7 +67,7 @@ class AgentTest extends TestCase
     {
         $this->fakeLangflow();
         $t = $this->token();
-        $f = UploadedFile::fake()->createWithContent('kak.txt', "Satu baris kebutuhan");
+        $f = UploadedFile::fake()->createWithContent('kak.txt', 'Satu baris kebutuhan');
         $this->post('/api/agent', ['file' => $f], ['Authorization' => "Bearer {$t}"])
             ->assertOk()->assertJsonPath('lampiran', 'kak.txt');
     }
@@ -104,6 +105,37 @@ class AgentTest extends TestCase
         $this->postJson('/api/agent', ['message' => 'halo'], ['Authorization' => "Bearer {$t}"])
             ->assertOk()->assertJsonPath('mode', 'proposal');
         Http::assertSent(fn ($req) => ! array_key_exists('tweaks', $req->data()));
+    }
+
+    public function test_agent_konteks_proposal_dilampirkan_ke_prompt(): void
+    {
+        $this->fakeLangflow();
+        $t = $this->token();
+        $m = Member::where('nama', 'ag')->first();
+        $prop = Proposal::create([
+            'member_id' => $m->id,
+            'instansi' => 'RSUD Sehat',
+            'jenis_instansi' => 'Kesehatan',
+            'pagu' => 500000000,
+            'durasi_minggu' => 8,
+            'req_nama' => 'kak_rs.txt',
+            'req_satuan' => 'baris',
+            'req_jumlah' => 15,
+        ]);
+
+        $this->postJson('/api/agent', [
+            'message' => 'Bantu buat ringkasan',
+            'proposal_id' => $prop->id,
+        ], ['Authorization' => "Bearer {$t}"])->assertOk();
+
+        Http::assertSent(function ($req) {
+            $val = $req->data()['input_value'] ?? '';
+
+            return str_contains($val, 'KONTEKS PROPOSAL AKTIF')
+                && str_contains($val, 'RSUD Sehat')
+                && str_contains($val, '500.000.000')
+                && str_contains($val, 'Bantu buat ringkasan');
+        });
     }
 
     public function test_agent_mode_umum_mengirim_override_prompt(): void

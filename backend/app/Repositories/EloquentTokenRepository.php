@@ -10,6 +10,9 @@ class EloquentTokenRepository implements TokenRepository
 {
     public function create(int $memberId, int $ttlSeconds): array
     {
+        // Bersihkan token kedaluwarsa secara berkala
+        ApiToken::where('expires_at', '<', time())->delete();
+
         $token = Str::random(48);
         $row = ApiToken::create([
             'token' => hash('sha256', $token),

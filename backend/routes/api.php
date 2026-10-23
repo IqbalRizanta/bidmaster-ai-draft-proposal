@@ -7,9 +7,9 @@ use App\Http\Controllers\ProposalsController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/health', fn () => ['ok' => true]);
-Route::get('/catalog', [DraftController::class, 'catalog']);
-Route::get('/company', [ProposalsController::class, 'company']);
-Route::get('/agent/status', [AgentController::class, 'status']);
+Route::get('/catalog', [DraftController::class, 'catalog'])->middleware('throttle:60,1');
+Route::get('/company', [ProposalsController::class, 'company'])->middleware('throttle:60,1');
+Route::get('/agent/status', [AgentController::class, 'status'])->middleware('throttle:60,1');
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
 Route::post('/logout', [AuthController::class, 'logout']);
 

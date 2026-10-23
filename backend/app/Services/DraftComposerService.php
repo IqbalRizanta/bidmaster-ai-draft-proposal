@@ -168,7 +168,7 @@ class DraftComposerService
                 $rab .= "| {$k['kode']} | {$k['nama']} | {$qty} {$k['satuan']} | "
                     .self::fmt($k['harga_dasar']).' | '.self::fmt($k['harga_dasar'] * $qty)." |\n";
             }
-            $rab .= "|  |  |  | **Total bayar (Tender)** | **".self::fmt($total)."** |\n";
+            $rab .= '|  |  |  | **Total bayar (Tender)** | **'.self::fmt($total)."** |\n";
             if ($v['pagu']) {
                 $rab .= "\nPagu: Rp ".self::fmt($v['pagu']).' — '
                     .($total > $v['pagu'] ? 'DI ATAS pagu [perlu konfirmasi: turunkan qty]' : 'di dalam pagu').".\n";

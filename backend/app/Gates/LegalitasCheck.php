@@ -9,6 +9,7 @@ class LegalitasCheck implements GateCheck
     public function check(array $ctx): ?string
     {
         $missing = $ctx['missing_legal'] ?? [];
+
         return $missing !== [] ? 'Legalitas kurang: '.implode(', ', $missing).'.' : null;
     }
 }

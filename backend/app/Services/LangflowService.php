@@ -69,7 +69,7 @@ class LangflowService
 
         for ($attempt = 1; $attempt <= self::MAX_ATTEMPTS; $attempt++) {
             try {
-                $res = Http::timeout(300)
+                $res = Http::timeout(120)
                     ->withHeader('x-api-key', config('bidmaster.langflow_key'))
                     ->post($url, $payload);
             } catch (\Throwable $e) {
@@ -93,6 +93,7 @@ class LangflowService
 
             if ($err['retryable'] && $attempt < self::MAX_ATTEMPTS) {
                 usleep(1_500_000); // jeda singkat sebelum percobaan ulang
+
                 continue;
             }
 

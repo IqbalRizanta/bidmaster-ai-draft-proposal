@@ -13,7 +13,7 @@ class AdminSeeder extends Seeder
         Member::firstOrCreate(
             ['nama' => 'admin'],
             ['peran' => 'admin',
-             'password' => Hash::make(config('bidmaster.seed_admin_pass'))],
+                'password' => Hash::make(config('bidmaster.seed_admin_pass'))],
         );
     }
 }

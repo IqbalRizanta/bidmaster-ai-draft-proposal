@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Proposal;
 use App\Repositories\Contracts\AuditRepository;
 use App\Services\DocumentParserService;
 use App\Services\DocumentService;
@@ -30,6 +31,8 @@ class AgentController
 
     public function send(Request $request)
     {
+        set_time_limit(300);
+
         if (! $this->lf->configured()) {
             return response()->json([
                 'error' => 'Langflow belum dikonfigurasi. Isi LANGFLOW_URL dan LANGFLOW_API_KEY.',
@@ -51,11 +54,12 @@ class AgentController
             $msg = 'Tinjau dokumen terlampir dan berikan analisis serta usulan.';
         }
 
-        $flow = (string) ($data['flow'] ?? 'bidmaster_proposal_generator');
+        $flowInput = $data['flow'] ?? null;
         $allowed = ['bidmaster_proposal_generator', 'generate_proposal_draft', 'revise_proposal', 'generate_prd_from_brief'];
-        if (! in_array($flow, $allowed, true)) {
-            return response()->json(['error' => "Flow '{$flow}' tidak dikenal."], 400);
+        if ($flowInput !== null && ! in_array($flowInput, $allowed, true)) {
+            return response()->json(['error' => "Flow '{$flowInput}' tidak dikenal."], 400);
         }
+        $flow = $flowInput ?: $this->lf->flow();
         $session = mb_substr((string) ($data['session_id'] ?? ''), 0, 64);
 
         // Mode "umum": Bob boleh menjawab pertanyaan di luar konteks proposal.
@@ -63,17 +67,35 @@ class AgentController
         $mode = ($data['mode'] ?? 'proposal') === 'umum' ? 'umum' : 'proposal';
 
         $payload = $msg;
+
+        $propId = $data['proposal_id'] ?? $data['konteks_proposal'] ?? null;
+        if ($propId !== null && is_numeric($propId)) {
+            $proposal = Proposal::find((int) $propId);
+            if ($proposal && $this->ownProposal($request, $proposal)) {
+                $paguText = $proposal->pagu ? 'Rp '.number_format($proposal->pagu, 0, ',', '.') : 'Belum ditentukan';
+                $propKonteks = "=== KONTEKS PROPOSAL AKTIF ===\n"
+                    ."- ID Proposal: #{$proposal->id}\n"
+                    ."- Instansi: {$proposal->instansi} ({$proposal->jenis_instansi})\n"
+                    ."- Status: {$proposal->status}\n"
+                    ."- Pagu Anggaran: {$paguText}\n"
+                    ."- Durasi Pengerjaan: {$proposal->durasi_minggu} minggu\n"
+                    ."- Dokumen: {$proposal->req_nama} ({$proposal->req_jumlah} {$proposal->req_satuan})\n"
+                    .'=== AKHIR KONTEKS PROPOSAL ===';
+                $payload = $propKonteks."\n\n".$payload;
+            }
+        }
+
         if ($lampiran['teks'] !== '') {
-            $payload = $msg."\n\n=== DOKUMEN TERLAMPIR: ".$lampiran['nama']." ===\n".$lampiran['teks']
+            $payload = $payload."\n\n=== DOKUMEN TERLAMPIR: ".$lampiran['nama']." ===\n".$lampiran['teks']
                 ."\n=== AKHIR DOKUMEN TERLAMPIR ===";
         }
 
         $tweaks = $mode === 'umum' ? $this->lf->generalTemplate() : [];
-        $result = $this->lf->run($payload, $this->lf->flow(), $session, $tweaks);
+        $result = $this->lf->run($payload, $flow, $session, $tweaks);
         if (! $result['ok'] && $tweaks !== []) {
             // Node prompt mungkin berbeda di instance Langflow pengguna.
             // Fallback: jalankan tanpa override agar tetap ada jawaban.
-            $result = $this->lf->run($payload, $this->lf->flow(), $session);
+            $result = $this->lf->run($payload, $flow, $session);
         }
         if (! $result['ok']) {
             return response()->json(['error' => $result['error'],
@@ -86,6 +108,13 @@ class AgentController
         return response()->json(['text' => $result['text'], 'flow' => $flow, 'mode' => $mode,
             'saran_file' => $this->mintaFile($msg),
             'lampiran' => $lampiran['nama'] !== '' ? $lampiran['nama'] : null]);
+    }
+
+    private function ownProposal(Request $request, Proposal $proposal): bool
+    {
+        $u = $request->attributes->get('member');
+
+        return $u['peran'] === 'admin' || (int) $proposal->member_id === (int) $u['id'];
     }
 
     /**

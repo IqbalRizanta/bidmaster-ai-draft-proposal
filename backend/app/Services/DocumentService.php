@@ -13,6 +13,24 @@ class DocumentService
         return trim($s, '_') ?: 'proposal';
     }
 
+    public static function formatSumberKlien(?array $s): string
+    {
+        if (! is_array($s)) {
+            return '';
+        }
+        if (isset($s['baris'])) {
+            return 'baris '.$s['baris'];
+        }
+        if (isset($s['halaman'], $s['paragraf'])) {
+            return 'hal. '.$s['halaman'].', par. '.$s['paragraf'];
+        }
+        if (isset($s['paragraf'])) {
+            return 'par. '.$s['paragraf'];
+        }
+
+        return (string) ($s['label'] ?? '');
+    }
+
     /**
      * @return array{markdown:string,nama_file:string}
      */
@@ -50,9 +68,10 @@ class DocumentService
             $st = $snap['decisions'][$it['id']]['status_akhir'] ?? $it['status'];
             $src = [];
             if ($it['sumber_klien']) {
-                $s = $it['sumber_klien'];
-                $src[] = isset($s['baris']) ? 'Klien baris '.$s['baris']
-                    : 'Klien hal. '.$s['halaman'].', par. '.$s['paragraf'];
+                $fmt = self::formatSumberKlien($it['sumber_klien']);
+                if ($fmt !== '') {
+                    $src[] = 'Klien '.$fmt;
+                }
             }
             foreach ($it['sumber_knowledge'] as $k) {
                 $src[] = $k;
@@ -87,8 +106,7 @@ class DocumentService
             foreach ($snap['items'] as $it) {
                 if ($it['sumber_klien']) {
                     $n++;
-                    $s = $it['sumber_klien'];
-                    $lok = isset($s['baris']) ? 'baris '.$s['baris'] : 'hal. '.$s['halaman'].', par. '.$s['paragraf'];
+                    $lok = self::formatSumberKlien($it['sumber_klien']);
                     $md[] = "| {$n} | {$it['id']} | requirement klien | {$lok} |";
                 }
                 foreach ($it['sumber_knowledge'] as $k) {

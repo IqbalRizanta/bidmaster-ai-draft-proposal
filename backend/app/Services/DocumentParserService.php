@@ -2,6 +2,10 @@
 
 namespace App\Services;
 
+use PhpOffice\PhpWord\Element\ListItem;
+use PhpOffice\PhpWord\Element\Table;
+use PhpOffice\PhpWord\Element\Text;
+use PhpOffice\PhpWord\Element\TextRun;
 use PhpOffice\PhpWord\IOFactory;
 use Smalot\PdfParser\Parser as PdfParser;
 
@@ -17,6 +21,7 @@ class DocumentParserService
 
     /**
      * @return array{nama:string,satuan:string,units:list<array{label:string,teks:string}>,jumlah:int}
+     *
      * @throws \InvalidArgumentException bila format/ukuran tidak valid
      */
     public function parse(string $nama, string $bytes): array
@@ -40,6 +45,13 @@ class DocumentParserService
 
     private function fromLines(string $nama, string $bytes): array
     {
+        if (str_contains($bytes, "\0")) {
+            throw new \InvalidArgumentException('Format file biner tidak didukung.');
+        }
+        if (! mb_check_encoding($bytes, 'UTF-8')) {
+            throw new \InvalidArgumentException('Format teks harus ber-encoding UTF-8 valid.');
+        }
+
         $text = mb_convert_encoding($bytes, 'UTF-8', 'UTF-8');
         $units = [];
         foreach (preg_split('/\R/', $text) as $i => $line) {
@@ -47,7 +59,7 @@ class DocumentParserService
             if ($line === '') {
                 continue;
             }
-            $units[] = ['label' => 'baris '.($i + 1), 'teks' => mb_substr($line, 0, 2000)];
+            $units[] = ['label' => 'baris '.($i + 1), 'teks' => mb_substr($line, 0, 2000), 'baris' => $i + 1];
         }
 
         return ['nama' => mb_substr($nama, 0, 80), 'satuan' => 'baris',
@@ -61,9 +73,14 @@ class DocumentParserService
         } catch (\Throwable) {
             throw new \InvalidArgumentException('PDF tidak bisa dibaca.');
         }
+        $pages = $pdf->getPages();
+        if (count($pages) > 100) {
+            throw new \InvalidArgumentException('Jumlah halaman PDF maksimal 100.');
+        }
+
         $units = [];
         $no = 0;
-        foreach ($pdf->getPages() as $pi => $page) {
+        foreach ($pages as $pi => $page) {
             try {
                 $text = $page->getText();
             } catch (\Throwable) {
@@ -89,15 +106,28 @@ class DocumentParserService
 
     private function fromDocx(string $nama, string $bytes): array
     {
-        $tmp = tempnam(sys_get_temp_dir(), 'bm').'.docx';
-        file_put_contents($tmp, $bytes);
+        $base = tempnam(sys_get_temp_dir(), 'bm');
+        $tmp = $base.'.docx';
         try {
+            file_put_contents($tmp, $bytes);
+            $zip = new \ZipArchive;
+            if ($zip->open($tmp) === true) {
+                $stat = $zip->statName('word/document.xml');
+                $zip->close();
+                if ($stat && ($stat['size'] ?? 0) > 10 * 1024 * 1024) {
+                    throw new \InvalidArgumentException('Konten DOCX terlalu besar.');
+                }
+            }
             $doc = IOFactory::load($tmp);
+        } catch (\InvalidArgumentException $e) {
+            throw $e;
         } catch (\Throwable) {
-            @unlink($tmp);
             throw new \InvalidArgumentException('DOCX tidak bisa dibaca.');
+        } finally {
+            @unlink($base);
+            @unlink($tmp);
         }
-        @unlink($tmp);
+
         $units = [];
         $no = 0;
         foreach ($doc->getSections() as $section) {
@@ -120,11 +150,11 @@ class DocumentParserService
 
     private function elementText(mixed $el): string
     {
-        if ($el instanceof \PhpOffice\PhpWord\Element\Text) {
+        if ($el instanceof Text) {
             return trim($el->getText());
         }
-        if ($el instanceof \PhpOffice\PhpWord\Element\TextRun
-            || $el instanceof \PhpOffice\PhpWord\Element\ListItem) {
+        if ($el instanceof TextRun
+            || $el instanceof ListItem) {
             $out = '';
             foreach ($el->getElements() as $child) {
                 $out .= $this->elementText($child).' ';
@@ -132,7 +162,7 @@ class DocumentParserService
 
             return trim($out);
         }
-        if ($el instanceof \PhpOffice\PhpWord\Element\Table) {
+        if ($el instanceof Table) {
             $out = '';
             foreach ($el->getRows() as $row) {
                 foreach ($row->getCells() as $cell) {

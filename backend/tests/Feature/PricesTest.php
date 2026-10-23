@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Member;
+use App\Models\Proposal;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
 use Tests\TestCase;
@@ -19,11 +20,11 @@ class PricesTest extends TestCase
         $a = $this->postJson('/api/login', ['nama' => 'ad', 'pw' => 'pw123456'])->json('token');
         $h = ['Authorization' => "Bearer {$t}"];
         $p = $this->postJson('/api/proposals', ['instansi' => 'Dinas H'], $h)->json('proposal');
-        \App\Models\Proposal::where('id', $p['id'])->update(['items' => json_encode([
+        Proposal::where('id', $p['id'])->update(['items' => json_encode([
             ['id' => 'B2', 'kategori' => 'T', 'requirement' => 'Backend', 'kutipan' => 'x',
-             'sumber_klien' => ['baris' => 1], 'sumber_knowledge' => [], 'status' => 'sesuai',
-             'alasan' => '', 'keyakinan' => 'tinggi',
-             'komponen_usulan' => [['kode' => 'DEV-BE', 'qty' => 10]]],
+                'sumber_klien' => ['baris' => 1], 'sumber_knowledge' => [], 'status' => 'sesuai',
+                'alasan' => '', 'keyakinan' => 'tinggi',
+                'komponen_usulan' => [['kode' => 'DEV-BE', 'qty' => 10]]],
         ])]);
 
         return [$p['id'], $h, ['Authorization' => "Bearer {$a}"]];
@@ -97,7 +98,7 @@ class PricesTest extends TestCase
     {
         [$id, $h] = $this->boot();
         $this->getJson("/api/proposals/{$id}/prices", $h)->assertOk();
-        $row = \App\Models\Proposal::find($id)->prices[0];
+        $row = Proposal::find($id)->prices[0];
         $this->assertSame(1100000, $row['harga_acuan']);
         $this->assertArrayHasKey('harga_acuan', $row);
     }
@@ -124,7 +125,7 @@ class PricesTest extends TestCase
     public function test_pagu_pakai_harga_proposal(): void
     {
         [$id, $h] = $this->boot();
-        \App\Models\Proposal::where('id', $id)->update(['pagu' => 9500000]);
+        Proposal::where('id', $id)->update(['pagu' => 9500000]);
         $rows = $this->rows();
         $rows[0]['harga_proposal'] = 900000;
         $rows[0]['alasan'] = 'negosiasi klien';

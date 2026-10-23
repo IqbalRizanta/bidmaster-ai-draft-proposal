@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use PhpOffice\PhpWord\PhpWord;
+use PhpOffice\PhpWord\Settings;
 use PhpOffice\PhpWord\SimpleType\Jc;
 
 /** Cover + header/footer + logo di DOCX. Hanya harga proposal, tanpa data internal. */
@@ -12,6 +13,8 @@ class ProposalDocxService
 
     public function toBytes(array $snap, string $logoPath): string
     {
+        Settings::setOutputEscapingEnabled(true);
+
         $built = $this->docs->build($snap);
         $c = $snap['company'];
         $warna = ltrim($c['warna_utama'] ?? '#1F3864', '#');
@@ -86,6 +89,7 @@ class ProposalDocxService
             $line = rtrim(mb_substr($rawLine, 0, 2000));
             if (str_starts_with($line, '|') && str_ends_with($line, '|')) {
                 $table[] = array_map('trim', explode('|', trim($line, '|')));
+
                 continue;
             }
             $flush();
@@ -101,9 +105,15 @@ class ProposalDocxService
         }
         $flush();
 
-        $tmp = tempnam(sys_get_temp_dir(), 'bm').'.docx';
-        $phpWord->save($tmp, 'Word2007');
+        $base = tempnam(sys_get_temp_dir(), 'bm');
+        $tmp = $base.'.docx';
+        try {
+            $phpWord->save($tmp, 'Word2007');
 
-        return file_get_contents($tmp);
+            return (string) file_get_contents($tmp);
+        } finally {
+            @unlink($base);
+            @unlink($tmp);
+        }
     }
 }

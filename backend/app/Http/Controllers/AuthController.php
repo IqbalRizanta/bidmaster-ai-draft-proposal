@@ -27,8 +27,10 @@ class AuthController
         $s = $this->tokens->create($m->id, config('bidmaster.session_hours') * 3600);
         $this->audits->log($m->id, 'login');
 
+        $secure = $request->isSecure() || app()->isProduction();
+
         return response()->json(['token' => $s['token'], 'nama' => $m->nama, 'peran' => $m->peran])
-            ->cookie('bm_token', $s['token'], 0, '/', null, false, true, false, 'Strict');
+            ->cookie('bm_token', $s['token'], 0, '/', null, $secure, true, false, 'Strict');
     }
 
     public function logout(Request $request)

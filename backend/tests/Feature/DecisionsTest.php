@@ -2,8 +2,11 @@
 
 namespace Tests\Feature;
 
+use App\Models\Audit;
 use App\Models\Member;
+use App\Models\Proposal;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Hash;
 use Tests\TestCase;
 
@@ -19,15 +22,15 @@ class DecisionsTest extends TestCase
         $p = $this->postJson('/api/proposals', ['instansi' => 'Dinas Y'], $h)->json('proposal');
         $items = [
             ['id' => 'B9', 'kategori' => 'Keamanan', 'requirement' => 'ISO 27001',
-             'kutipan' => 'wajib ISO/IEC 27001', 'sumber_klien' => ['baris' => 9],
-             'sumber_knowledge' => ['K01'], 'status' => 'berisiko', 'alasan' => 'Ragu.',
-             'keyakinan' => 'rendah', 'komponen_usulan' => [], 'perlu_konfirmasi' => false],
+                'kutipan' => 'wajib ISO/IEC 27001', 'sumber_klien' => ['baris' => 9],
+                'sumber_knowledge' => ['K01'], 'status' => 'berisiko', 'alasan' => 'Ragu.',
+                'keyakinan' => 'rendah', 'komponen_usulan' => [], 'perlu_konfirmasi' => false],
             ['id' => 'B1', 'kategori' => 'Teknis', 'requirement' => 'Frontend',
-             'kutipan' => 'frontend', 'sumber_klien' => ['baris' => 1],
-             'sumber_knowledge' => [], 'status' => 'sesuai', 'alasan' => '',
-             'keyakinan' => 'tinggi', 'komponen_usulan' => [], 'perlu_konfirmasi' => false],
+                'kutipan' => 'frontend', 'sumber_klien' => ['baris' => 1],
+                'sumber_knowledge' => [], 'status' => 'sesuai', 'alasan' => '',
+                'keyakinan' => 'tinggi', 'komponen_usulan' => [], 'perlu_konfirmasi' => false],
         ];
-        \App\Models\Proposal::where('id', $p['id'])->update(['items' => json_encode($items)]);
+        Proposal::where('id', $p['id'])->update(['items' => json_encode($items)]);
 
         return [$p['id'], $h];
     }
@@ -43,7 +46,7 @@ class DecisionsTest extends TestCase
         $this->assertSame('berisiko', $dec['status_awal']);
         $this->assertSame('Cek internal', $dec['catatan']);
         $this->assertDatabaseHas('audits', ['aksi' => 'keputusan']);
-        $audit = \App\Models\Audit::where('aksi', 'keputusan')->first();
+        $audit = Audit::where('aksi', 'keputusan')->first();
         $this->assertStringContainsString('B9', $audit->detail);
         $this->assertStringContainsString('berisiko', $audit->detail);
     }
@@ -85,7 +88,7 @@ class DecisionsTest extends TestCase
         // tanpa konfirmasi ditolak
         $this->postJson("/api/proposals/{$id}/approve-sesuai", ['konfirmasi' => false], $h)->assertStatus(400);
         // ubah keputusan setelah ada approval (simulasikan) mereset approvals
-        \App\Models\Proposal::where('id', $id)->update(['approvals' => json_encode([['oleh' => 'x']])]);
+        Proposal::where('id', $id)->update(['approvals' => json_encode([['oleh' => 'x']])]);
         $this->patchJson("/api/proposals/{$id}/items/B1/decision", ['putusan' => 'benar'], $h)->assertOk();
         $this->assertSame([], $this->getJson("/api/proposals/{$id}", $h)->json('proposal.approvals'));
     }
@@ -106,7 +109,7 @@ class DecisionsTest extends TestCase
     {
         [$id, $h] = $this->boot();
         $txt = implode("\n", array_map(fn ($i) => "Baris kebutuhan {$i}", range(1, 12)));
-        $f = \Illuminate\Http\UploadedFile::fake()->createWithContent('req.txt', $txt);
+        $f = UploadedFile::fake()->createWithContent('req.txt', $txt);
         $this->post("/api/proposals/{$id}/upload", ['kind' => 'requirement', 'file' => $f], $h)->assertOk();
         $r = $this->getJson("/api/proposals/{$id}/source?baris=9&kutipan=Baris+kebutuhan+9", $h);
         $r->assertOk();
@@ -116,6 +119,30 @@ class DecisionsTest extends TestCase
         $this->assertSame('Baris kebutuhan 10', $r->json('bawah')[0]['teks']);
         $this->assertSame('Baris kebutuhan 11', $r->json('bawah')[1]['teks']);
         $this->getJson("/api/proposals/{$id}/source?baris=99", $h)->assertStatus(404);
+    }
+
+    public function test_source_docx_dan_pendukung(): void
+    {
+        [$id, $h] = $this->boot();
+        $p = Proposal::find($id);
+        $p->req_units = [
+            ['label' => 'par. 1', 'teks' => 'Paragraf satu', 'paragraf' => 1, 'halaman' => null],
+            ['label' => 'par. 2', 'teks' => 'Paragraf dua', 'paragraf' => 2, 'halaman' => null],
+        ];
+        $p->pendukung = [
+            ['nama' => 'lampiran.txt', 'units' => [
+                ['label' => 'baris 1', 'teks' => 'Kebutuhan lampiran 1'],
+            ]],
+        ];
+        $p->save();
+
+        $r1 = $this->getJson("/api/proposals/{$id}/source?paragraf=2", $h)->assertOk();
+        $this->assertSame('par. 2', $r1->json('label'));
+        $this->assertSame('Paragraf dua', $r1->json('target'));
+
+        $r2 = $this->getJson("/api/proposals/{$id}/source?baris=1", $h)->assertOk();
+        $this->assertSame('lampiran.txt: baris 1', $r2->json('label'));
+        $this->assertSame('Kebutuhan lampiran 1', $r2->json('target'));
     }
 
     private function token(): string

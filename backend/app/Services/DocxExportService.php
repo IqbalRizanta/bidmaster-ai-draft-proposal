@@ -4,6 +4,7 @@ namespace App\Services;
 
 use PhpOffice\PhpWord\Element\Section;
 use PhpOffice\PhpWord\PhpWord;
+use PhpOffice\PhpWord\Settings;
 use PhpOffice\PhpWord\SimpleType\Jc;
 use PhpOffice\PhpWord\Style\ListItem as ListItemStyle;
 
@@ -20,7 +21,7 @@ class DocxExportService
         if (is_file($p)) {
             return $p;
         }
-        $dir = rtrim((string) config('bidmaster.knowledge_dir'), "/\\");
+        $dir = rtrim((string) config('bidmaster.knowledge_dir'), '/\\');
         foreach ([$dir.'/../frontend/public/NusaTech-Logo.png', $dir.'/../frontend/public/BidMaster-Logo.png'] as $alt) {
             if (is_file($alt)) {
                 return $alt;
@@ -35,6 +36,8 @@ class DocxExportService
      */
     public function toBytes(string $markdown, array $opts = []): string
     {
+        Settings::setOutputEscapingEnabled(true);
+
         $phpWord = new PhpWord;
         $phpWord->setDefaultFontName('Calibri');
 
@@ -88,12 +91,16 @@ class DocxExportService
 
         $this->render($body, $markdown);
 
-        $tmp = tempnam(sys_get_temp_dir(), 'bm').'.docx';
-        $phpWord->save($tmp, 'Word2007');
-        $bytes = (string) file_get_contents($tmp);
-        @unlink($tmp);
+        $base = tempnam(sys_get_temp_dir(), 'bm');
+        $tmp = $base.'.docx';
+        try {
+            $phpWord->save($tmp, 'Word2007');
 
-        return $bytes;
+            return (string) file_get_contents($tmp);
+        } finally {
+            @unlink($base);
+            @unlink($tmp);
+        }
     }
 
     /** Tulis markdown ke sebuah section dengan gaya yang rapi. */
@@ -153,14 +160,17 @@ class DocxExportService
                     $flushTable();
                     $inCode = true;
                 }
+
                 continue;
             }
             if ($inCode) {
                 $code[] = $line;
+
                 continue;
             }
             if (str_starts_with($line, '|') && str_ends_with($line, '|')) {
                 $table[] = array_map('trim', explode('|', trim($line, '|')));
+
                 continue;
             }
             $flushTable();
